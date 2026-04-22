@@ -77,17 +77,6 @@ public class ObjectDetectionService : IObjectDetectionService
         {
             var results = yolo.RunObjectDetection(frame, confidence: _onnx.Confidence, iou: _onnx.Iou).Track(sortTracker);
 
-            if (results.Count > 0)
-            {
-                var labels = string.Join(", ", results.Select(r => $"{r.Label.Name}({r.Confidence:P0})"));
-                _logger.LogInformation("Frame {Frame}: {Count} detection(s) — {Labels}",
-                    frameIndex, results.Count, labels);
-            }
-            else
-            {
-                _logger.LogDebug("Frame {Frame}: no detections", frameIndex);
-            }
-
             foreach (var grp in results.GroupBy(r => r.Label.Name))
             {
                 var count = grp.Count();
@@ -96,15 +85,8 @@ public class ObjectDetectionService : IObjectDetectionService
             }
 
             if (frameIndex >= 100)
-            {
-                _logger.LogInformation("Frame limit reached (frame {Frame}), stopping video processing", frameIndex);
                 yolo.StopVideoProcessing();
-            }
         };
-
-        yolo.OnVideoEnd = () =>
-            _logger.LogInformation("Video processing ended. Max simultaneous objects: {Summary}",
-                string.Join(", ", maxPerLabel.Select(kv => $"{kv.Key}:{kv.Value}")));
 
         _logger.LogInformation("Starting video processing...");
         await Task.Run(() => yolo.StartVideoProcessing(), cancellationToken);

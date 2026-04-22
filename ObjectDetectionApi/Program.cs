@@ -2,8 +2,18 @@ using Microsoft.Extensions.Options;
 using ObjectDetectionApi.Models;
 using ObjectDetectionApi.Services;
 using ObjectDetectionApi.Workers;
+using Serilog;
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.File(
+        path: "logs/log-.txt",
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 31)
+    .CreateLogger();
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseSerilog();
 
 builder.Services
     .Configure<Onnx>(builder.Configuration.GetSection("Onnx"))
