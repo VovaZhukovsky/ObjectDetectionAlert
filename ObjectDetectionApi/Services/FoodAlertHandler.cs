@@ -8,7 +8,7 @@ public class FoodAlertHandler : IDetectionHandler
     private readonly TelegramBotClient _client;
     private readonly string _chatId;
     private readonly ILogger<FoodAlertHandler> _logger;
-    private bool? _previousFoodFound;
+    private bool _previousFoodFound = true;
 
     public FoodAlertHandler(TelegramBot settings, ILogger<FoodAlertHandler> logger)
     {
@@ -22,7 +22,7 @@ public class FoodAlertHandler : IDetectionHandler
         var foodFound = result.ObjectsFound;
 
         // alert only on transition from found → not found
-        var shouldAlert = !foodFound && (_previousFoodFound == true);
+        var shouldAlert = !foodFound && _previousFoodFound;
 
         _previousFoodFound = foodFound;
 
