@@ -30,6 +30,6 @@ public class FoodAlertHandler : IDetectionHandler
             return;
 
         _logger.LogWarning("FoodAlertHandler: cat food just disappeared — sending Telegram alert");
-        await _client.SendMessage(_chatId, "Кошачий корм не обнаружен! Нужно пополнить миску.", cancellationToken: cancellationToken);
+        await _client.SendMessage(_chatId, "🍽️ Cat food is empty! Time to refill the bowl.", cancellationToken: cancellationToken);
     }
 }

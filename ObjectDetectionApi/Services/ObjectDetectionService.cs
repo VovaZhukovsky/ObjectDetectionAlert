@@ -57,13 +57,20 @@ public class ObjectDetectionService : IObjectDetectionService
         {
             VideoInput = _video.Input,
             FrameRate = FrameRate.AUTO,
-            Width = 720,
+            Width = 416,
             Height = -2,
             CompressionQuality = 30,
             VideoChunkDuration = 0,
-            FrameInterval = 0,
-            
+            FrameInterval = 5,
         };
+
+        if (_video.NeedOutput)
+        {
+            Directory.CreateDirectory(_video.OutputPath);
+            var fileName = $"{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}.mp4";
+            videoOptions.VideoOutput = Path.Combine(_video.OutputPath, fileName);
+            RotateOutputFiles(_video.OutputPath, _video.MaxFiles);
+        }
 
         yolo.InitializeVideo(videoOptions);
         var metadata = yolo.GetVideoMetaData();
@@ -72,6 +79,28 @@ public class ObjectDetectionService : IObjectDetectionService
             _video.Input, metadata.Width, metadata.Height, metadata.FPS, metadata.TotalFrames);
 
         var sortTracker = new SortTracker(0.5f, 5, 60);
+
+        DetectionDrawingOptions? drawingOptions = _video.NeedOutput ? new DetectionDrawingOptions
+        {
+            DrawBoundingBoxes = true,
+            DrawConfidenceScore = true,
+            DrawLabels = true,
+            EnableFontShadow = true,
+            Font = SKTypeface.Default,
+            FontSize = 18,
+            FontColor = SKColors.White,
+            DrawLabelBackground = true,
+            EnableDynamicScaling = true,
+            BorderThickness = 2,
+            BoundingBoxOpacity = 128,
+            DrawTrackedTail = true,
+            TailPaintColorStart = new SKColor(255, 105, 180),
+            TailPaintColorEnd = SKColor.Empty.WithAlpha(0),
+            TailThickness = 4,
+        } : null;
+
+        // With FrameInterval=5, frameIndex counts delivered frames, not original frames
+        const int maxFramesToProcess = 20;
 
         yolo.OnVideoFrameReceived = (SKBitmap frame, long frameIndex) =>
         {
@@ -84,7 +113,10 @@ public class ObjectDetectionService : IObjectDetectionService
                     maxPerLabel[grp.Key] = count;
             }
 
-            if (frameIndex >= 100)
+            if (drawingOptions is not null)
+                frame.Draw(results, drawingOptions);
+
+            if (frameIndex >= maxFramesToProcess)
                 yolo.StopVideoProcessing();
         };
 
@@ -113,5 +145,19 @@ public class ObjectDetectionService : IObjectDetectionService
             DetectionsByLabel: byLabel,
             ProcessedAt: processedAt
         );
+    }
+
+    private void RotateOutputFiles(string outputPath, int maxFiles)
+    {
+        var files = Directory.GetFiles(outputPath, "*.mp4")
+            .OrderBy(File.GetCreationTimeUtc)
+            .ToList();
+
+        while (files.Count >= maxFiles)
+        {
+            File.Delete(files[0]);
+            _logger.LogInformation("Deleted old video file: {File}", files[0]);
+            files.RemoveAt(0);
+        }
     }
 }
