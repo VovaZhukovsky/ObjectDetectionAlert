@@ -1,115 +1,196 @@
-Роутер (OpenWrt)
+# ObjectDetectionApi
 
-# 1. Сгенерировать SSH ключ
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+.NET 8 Web API для обнаружения объектов на RTSP-потоке с помощью YOLOv11 ONNX модели. Запускается на удалённом сервере, получает видео напрямую с камеры через WireGuard туннель, отправляет уведомления в Telegram.
 
-# 2. Конвертировать в формат dropbear
-dropbearconvert openssh dropbear ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.db
+## Схема инфраструктуры
 
-# 3. Добавить публичный ключ на сервер
-cat ~/.ssh/id_ed25519.pub
-# → скопировать в ~/.ssh/authorized_keys на сервере
+```
+Камера (<camera-ip>)
+        │ RTSP
+        ▼
+Роутер OpenWrt (10.10.0.2)
+        │ WireGuard tunnel (UDP 51820)
+        ▼
+Сервер <server-ip> (10.10.0.1)
+        │
+ ObjectDetectionApi
+        │
+   Telegram Bot
+```
 
-# 4. Создать init скрипт автозапуска туннеля
-cat > /etc/init.d/rtsp-tunnel << 'EOF'     
-#!/bin/sh /etc/rc.common
-START=99
-STOP=10
-USE_PROCD=1
+---
 
-start_service() {
-procd_open_instance
-procd_set_param command autossh -M 0 -N \
--R 8554:192.168.8.167:554 \
--o ServerAliveInterval=30 \
--p 14749 \
--i /home/zhuvla/.ssh/id_ed25519.db \
-zhuvla@156.229.27.20                
-procd_set_param respawn 3600 5 0    
-procd_close_instance                    
-}                                                                                                                                                                     
-EOF
+## Роутер (OpenWrt)
 
-chmod +x /etc/init.d/rtsp-tunnel                                                                                                                                      
-/etc/init.d/rtsp-tunnel enable                                                                                                                                        
-/etc/init.d/rtsp-tunnel start
-                                              
----                                     
-Удалённый сервер (156.229.27.20)
+### 1. Установить WireGuard
 
-# 1. Установить зависимости
-sudo apt install dotnet-sdk-8.0 ffmpeg libfontconfig1
+```sh
+opkg update
+opkg install wireguard-tools kmod-wireguard luci-proto-wireguard
+```
 
-# 2. Установить MediaMTX
-Камера использует HEVC и скорее всего UDP для медиаданных — SSH туннель только TCP. Поэтому видео данные не доходят.
-Лучшее решение — использовать MediaMTX как прокси на сервере. Он примет RTSP через TCP туннель и переотдаст локально
-без него 
-wget https://github.com/bluenviron/mediamtx/releases/download/v1.17.1/mediamtx_v1.17.1_linux_amd64.tar.gz                                                             
-tar xf mediamtx_v1.17.1_linux_amd64.tar.gz
+### 2. Сгенерировать ключи
 
-# 3. Настроить mediamtx.yml
-cat > ~/mediamtx.yml << 'EOF'                                                                                                                                         
-rtspAddress: :8555
+```sh
+wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
+```
 
-paths:                                     
-cam:                                                                                                                                                                
-source: rtsp://admin:admin123456@127.0.0.1:8554/ch=1&subtype=0
-rtspTransport: tcp                      
-EOF
+### 3. Настроить интерфейс через UCI
 
-# 4. Создать systemd сервис MediaMTX
-sudo tee /etc/systemd/system/mediamtx.service << 'EOF'
-[Unit]                                                                                                                                                                
-Description=MediaMTX                       
+```sh
+uci set network.wg0=interface
+uci set network.wg0.proto=wireguard
+uci set network.wg0.private_key="<router_private_key>"
+uci set network.wg0.addresses="10.10.0.2/24"
+
+uci add network wireguard_wg0
+uci set network.@wireguard_wg0[-1].name="vps"
+uci set network.@wireguard_wg0[-1].public_key="<server_public_key>"
+uci set network.@wireguard_wg0[-1].endpoint_host="<server-ip>"
+uci set network.@wireguard_wg0[-1].endpoint_port="51820"
+uci set network.@wireguard_wg0[-1].allowed_ips="10.10.0.1/32"
+uci set network.@wireguard_wg0[-1].persistent_keepalive="25"
+
+uci commit network
+/etc/init.d/network restart
+```
+
+### 4. Настроить firewall
+
+В LuCI → Network → Firewall:
+- Зона `wg`: Input/Output — accept, Masquerading — включить
+- Traffic Rules: добавить правило `wg → lan` только для `<camera-ip>` (блокирует доступ к остальной домашней сети)
+
+---
+
+## Сервер (<server-ip>)
+
+### 1. Установить зависимости
+
+```sh
+sudo apt install dotnet-sdk-8.0 ffmpeg libfontconfig1 wireguard
+```
+
+### 2. Настроить WireGuard
+
+```sh
+wg genkey | tee /etc/wireguard/server_private.key | wg pubkey > /etc/wireguard/server_public.key
+```
+
+`/etc/wireguard/wg0.conf`:
+```ini
+[Interface]
+PrivateKey = <server_private_key>
+Address = 10.10.0.1/24
+ListenPort = 51820
+
+[Peer]
+PublicKey = <router_public_key>
+AllowedIPs = 10.10.0.2/32, <camera-ip>/32
+```
+
+```sh
+systemctl enable --now wg-quick@wg0
+# открыть порт
+iptables -A INPUT -p udp --dport 51820 -j ACCEPT
+iptables-save > /etc/iptables/rules.v4
+# маршрут к камере
+ip route add <camera-ip>/32 via 10.10.0.2
+```
+
+### 3. Собрать и задеплоить ObjectDetectionApi
+
+```sh
+# локально
+dotnet publish ObjectDetectionApi/ObjectDetectionApi -c Release -o /home/<user>/objectdetection-publish
+scp -P <ssh-port> -r /home/<user>/objectdetection-publish <user>@<server-ip>:/home/<user>/
+```
+
+### 4. Создать systemd сервис
+
+```sh
+sudo tee /etc/systemd/system/objectdetection.service << 'EOF'
+[Unit]
+Description=Object Detection API
 After=network.target
 
 [Service]
-User=zhuvla                                                                                                                                                           
-ExecStart=/home/zhuvla/mediamtx /home/zhuvla/mediamtx.yml
+Type=simple
+User=<user>
+WorkingDirectory=/home/<user>/objectdetection-publish
+ExecStart=/home/<user>/objectdetection-publish/ObjectDetectionApi
 Restart=always
+RestartSec=10
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://localhost:5000
 
 [Install]
-WantedBy=multi-user.target                                                                                                                                            
+WantedBy=multi-user.target
 EOF
 
-sudo systemctl enable --now mediamtx
-
-# 5. Собрать и задеплоить ObjectDetectionApi
-cd ~/ObjectDetectionApi                                                                                                                                               
-dotnet build
-
-# 6. Создать systemd сервис ObjectDetectionApi
-sudo tee /etc/systemd/system/objectdetection.service << 'EOF'                                                                                                         
-[Unit]                                      
-Description=ObjectDetection API         
-After=network.target mediamtx.service
-
-[Service]
-User=zhuvla                                                                                                                                                           
-WorkingDirectory=/home/zhuvla/ObjectDetectionApi/ObjectDetectionApi
-ExecStart=dotnet run --project /home/zhuvla/ObjectDetectionApi/ObjectDetectionApi
-Restart=always
-
-[Install]
-WantedBy=multi-user.target                                                                                                                                            
-EOF
-
+sudo systemctl daemon-reload
 sudo systemctl enable --now objectdetection
+```
 
-  ---
-appsettings.json на сервере
+---
 
-{                                       
-"Onnx": {
-"ModelPath": "/home/zhuvla/best.onnx",                                                                                                                            
-"ObjectsForSearch": ["cat", "cat_bowl", "dry_cat_food"],
-"Confidence": 0.5,                                                                                                                                                
-"Iou": 0.45                            
-},
-"Video": {                                                                                                                                                          
-"Input": "rtsp://127.0.0.1:8555/cam"
-},                                                                                                                                                                  
-"Worker": {                              
-"IntervalSeconds": 60
+## appsettings.json на сервере
+
+```json
+{
+  "Onnx": {
+    "ModelPath": "/home/<user>/objectdetection-publish/best.onnx",
+    "ObjectsForSearch": ["dry_cat_food"],
+    "Confidence": 0.5,
+    "Iou": 0.45
+  },
+  "Video": {
+    "Input": "rtsp://<camera-user>:<camera-password>@<camera-ip>:554/ch=1&subtype=0",
+    "NeedOutput": false,
+    "OutputPath": "video_output",
+    "MaxFiles": 30
+  },
+  "TelegramBot": {
+    "Token": "...",
+    "ChatId": "..."
+  },
+  "Worker": {
+    "IntervalSeconds": 60
+  }
 }
-}
+```
+
+`NeedOutput: true` — сохранять аннотированные MP4 в `OutputPath`, ротация до `MaxFiles` файлов.  
+`Confidence` и `Iou` — поднять, если модель ловит фантомные объекты.
+
+---
+
+## Управление сервисами
+
+```sh
+# статус
+sudo systemctl status objectdetection
+
+# перезапуск после деплоя
+sudo systemctl restart objectdetection
+
+# логи
+journalctl -u objectdetection -f
+# или файловые логи:
+tail -f /home/<user>/objectdetection-publish/logs/log-$(date +%Y%m%d).txt
+```
+
+## Проверка туннеля
+
+```sh
+wg show                  # handshake должен быть свежим
+ping 10.10.0.2           # роутер
+ping <camera-ip>         # камера
+```
+
+## API
+
+```
+GET /object/exist   — есть ли объекты из ObjectsForSearch на видео
+GET /object/count   — количество по каждому классу
+```

@@ -55,3 +55,4 @@ nunit-*.xml
 appsettings.*
 .idea
 CLAUDE.md
+video_output/
