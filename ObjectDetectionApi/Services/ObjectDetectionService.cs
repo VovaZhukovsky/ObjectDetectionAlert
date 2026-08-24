@@ -57,11 +57,11 @@ public class ObjectDetectionService : IObjectDetectionService
         {
             VideoInput = _video.Input,
             FrameRate = FrameRate.AUTO,
-            Width = 416,
+            Width = 720,
             Height = -2,
             CompressionQuality = 30,
             VideoChunkDuration = 0,
-            FrameInterval = 5,
+            FrameInterval = 10,
         };
 
         if (_video.NeedOutput)
@@ -99,8 +99,8 @@ public class ObjectDetectionService : IObjectDetectionService
             TailThickness = 4,
         } : null;
 
-        // With FrameInterval=5, frameIndex counts delivered frames, not original frames
-        const int maxFramesToProcess = 20;
+        // frameIndex counts delivered frames, not original frames
+        const int maxFramesToProcess = 5;
 
         yolo.OnVideoFrameReceived = (SKBitmap frame, long frameIndex) =>
         {
