@@ -1,6 +1,6 @@
 # ObjectDetectionApi
 
-.NET 8 Web API для обнаружения объектов на RTSP-потоке с помощью YOLOv11 ONNX модели. Запускается на удалённом сервере, получает видео напрямую с камеры через WireGuard туннель, отправляет уведомления в Telegram.
+.NET 8 Web API для обнаружения объектов на кадре с RTSP-камеры с помощью YOLOv11 ONNX модели. Запускается на удалённом сервере, получает кадр напрямую с камеры через ffmpeg через WireGuard туннель, отправляет уведомления в Telegram.
 
 ## Схема инфраструктуры
 
@@ -146,9 +146,9 @@ sudo systemctl enable --now objectdetection
   },
   "Video": {
     "Input": "rtsp://<camera-user>:<camera-password>@<camera-ip>:554/ch=1&subtype=0",
-    "NeedOutput": false,
-    "OutputPath": "video_output",
-    "MaxFiles": 30
+    "CollectDataset": false,
+    "DatasetPath": "dataset_frames",
+    "DatasetSaveEvery": 10
   },
   "TelegramBot": {
     "Token": "...",
@@ -156,11 +156,15 @@ sudo systemctl enable --now objectdetection
   },
   "Worker": {
     "IntervalSeconds": 60
+  },
+  "FoodAlert": {
+    "ConsecutiveMissesToAlert": 3
   }
 }
 ```
 
-`NeedOutput: true` — сохранять аннотированные MP4 в `OutputPath`, ротация до `MaxFiles` файлов.  
+`CollectDataset: true` — сохранять чистые кадры (без рамок) для обучения новой модели в `DatasetPath`, каждый `DatasetSaveEvery`-й кадр. По умолчанию выключено. После изменения нужен перезапуск сервиса.  
+`ConsecutiveMissesToAlert` — сколько запусков подряд без корма нужно для тревоги в Telegram.  
 `Confidence` и `Iou` — поднять, если модель ловит фантомные объекты.
 
 ---
@@ -191,6 +195,6 @@ ping <camera-ip>         # камера
 ## API
 
 ```
-GET /object/exist   — есть ли объекты из ObjectsForSearch на видео
+GET /object/exist   — есть ли объекты из ObjectsForSearch на кадре
 GET /object/count   — количество по каждому классу
 ```

@@ -56,3 +56,4 @@ appsettings.*
 .idea
 CLAUDE.md
 video_output/
+dataset_frames

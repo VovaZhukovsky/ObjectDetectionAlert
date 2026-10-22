@@ -23,8 +23,11 @@ builder.Services
     .Configure<Video>(builder.Configuration.GetSection("Video"))
     .AddSingleton(s => s.GetRequiredService<IOptions<Video>>().Value)
     .Configure<WorkerSettings>(builder.Configuration.GetSection("Worker"))
-    .AddSingleton(s => s.GetRequiredService<IOptions<WorkerSettings>>().Value);
+    .AddSingleton(s => s.GetRequiredService<IOptions<WorkerSettings>>().Value)
+    .Configure<FoodAlertSettings>(builder.Configuration.GetSection("FoodAlert"))
+    .AddSingleton(s => s.GetRequiredService<IOptions<FoodAlertSettings>>().Value);
 
+builder.Services.AddSingleton<ISnapshotService, FfmpegSnapshotService>();
 builder.Services.AddSingleton<IObjectDetectionService, ObjectDetectionService>();
 builder.Services.AddSingleton<IDetectionHandler, FoodAlertHandler>();
 builder.Services.AddHostedService<DetectionWorker>();

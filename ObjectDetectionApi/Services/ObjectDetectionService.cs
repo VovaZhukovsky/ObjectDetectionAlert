@@ -3,25 +3,42 @@ using SkiaSharp;
 using YoloDotNet;
 using YoloDotNet.Enums;
 using YoloDotNet.ExecutionProvider.Cpu;
-using YoloDotNet.Extensions;
 using YoloDotNet.Models;
-using YoloDotNet.Trackers;
-using YoloDotNet.Video;
 
 namespace ObjectDetectionApi.Services;
 
-public class ObjectDetectionService : IObjectDetectionService
+public class ObjectDetectionService : IObjectDetectionService, IDisposable
 {
     private readonly Onnx _onnx;
     private readonly Video _video;
+    private readonly ISnapshotService _snapshotService;
     private readonly ILogger<ObjectDetectionService> _logger;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
+    private readonly Yolo _yolo;
+    private long _runCount;
 
-    public ObjectDetectionService(Onnx onnx, Video video, ILogger<ObjectDetectionService> logger)
+    public ObjectDetectionService(
+        Onnx onnx,
+        Video video,
+        ISnapshotService snapshotService,
+        ILogger<ObjectDetectionService> logger)
     {
         _onnx = onnx;
         _video = video;
+        _snapshotService = snapshotService;
         _logger = logger;
+
+        _logger.LogInformation("Loading ONNX model: {ModelPath}", _onnx.ModelPath);
+
+        // Loaded once and reused; Yolo is not thread-safe, so every call goes through _semaphore
+        _yolo = new Yolo(new YoloOptions
+        {
+            ExecutionProvider = new CpuExecutionProvider(_onnx.ModelPath),
+            ImageResize = ImageResize.Proportional,
+            SamplingOptions = new(SKFilterMode.Nearest, SKMipmapMode.None)
+        });
+
+        _logger.LogInformation("Model loaded: {ModelInfo}", _yolo.ModelInfo);
     }
 
     public async Task<DetectionResult> RunDetectionAsync(CancellationToken cancellationToken = default)
@@ -39,93 +56,18 @@ public class ObjectDetectionService : IObjectDetectionService
 
     private async Task<DetectionResult> RunDetectionCoreAsync(CancellationToken cancellationToken)
     {
-        // Max count of each label seen simultaneously in a single frame
-        var maxPerLabel = new Dictionary<string, int>();
+        using var frame = await _snapshotService.CaptureAsync(cancellationToken);
 
-        _logger.LogInformation("Loading ONNX model: {ModelPath}", _onnx.ModelPath);
+        if (_video.CollectDataset && _runCount++ % _video.DatasetSaveEvery == 0)
+            SaveDatasetFrame(frame);
 
-        using var yolo = new Yolo(new YoloOptions
-        {
-            ExecutionProvider = new CpuExecutionProvider(_onnx.ModelPath),
-            ImageResize = ImageResize.Proportional,
-            SamplingOptions = new(SKFilterMode.Nearest, SKMipmapMode.None)
-        });
-
-        _logger.LogInformation("Model loaded: {ModelInfo}", yolo.ModelInfo);
-
-        var videoOptions = new VideoOptions
-        {
-            VideoInput = _video.Input,
-            FrameRate = FrameRate.AUTO,
-            Width = 720,
-            Height = -2,
-            CompressionQuality = 30,
-            VideoChunkDuration = 0,
-            FrameInterval = 10,
-        };
-
-        if (_video.NeedOutput)
-        {
-            Directory.CreateDirectory(_video.OutputPath);
-            var fileName = $"{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}.mp4";
-            videoOptions.VideoOutput = Path.Combine(_video.OutputPath, fileName);
-            RotateOutputFiles(_video.OutputPath, _video.MaxFiles);
-        }
-
-        yolo.InitializeVideo(videoOptions);
-        var metadata = yolo.GetVideoMetaData();
-        _logger.LogInformation(
-            "Video initialized: {Input} | {Width}x{Height} @ {Fps}fps | total frames: {TotalFrames}",
-            _video.Input, metadata.Width, metadata.Height, metadata.FPS, metadata.TotalFrames);
-
-        var sortTracker = new SortTracker(0.5f, 5, 60);
-
-        DetectionDrawingOptions? drawingOptions = _video.NeedOutput ? new DetectionDrawingOptions
-        {
-            DrawBoundingBoxes = true,
-            DrawConfidenceScore = true,
-            DrawLabels = true,
-            EnableFontShadow = true,
-            Font = SKTypeface.Default,
-            FontSize = 18,
-            FontColor = SKColors.White,
-            DrawLabelBackground = true,
-            EnableDynamicScaling = true,
-            BorderThickness = 2,
-            BoundingBoxOpacity = 128,
-            DrawTrackedTail = true,
-            TailPaintColorStart = new SKColor(255, 105, 180),
-            TailPaintColorEnd = SKColor.Empty.WithAlpha(0),
-            TailThickness = 4,
-        } : null;
-
-        // frameIndex counts delivered frames, not original frames
-        const int maxFramesToProcess = 5;
-
-        yolo.OnVideoFrameReceived = (SKBitmap frame, long frameIndex) =>
-        {
-            var results = yolo.RunObjectDetection(frame, confidence: _onnx.Confidence, iou: _onnx.Iou).Track(sortTracker);
-
-            foreach (var grp in results.GroupBy(r => r.Label.Name))
-            {
-                var count = grp.Count();
-                if (!maxPerLabel.TryGetValue(grp.Key, out var prev) || count > prev)
-                    maxPerLabel[grp.Key] = count;
-            }
-
-            if (drawingOptions is not null)
-                frame.Draw(results, drawingOptions);
-
-            if (frameIndex >= maxFramesToProcess)
-                yolo.StopVideoProcessing();
-        };
-
-        _logger.LogInformation("Starting video processing...");
-        await Task.Run(() => yolo.StartVideoProcessing(), cancellationToken);
+        var results = _yolo.RunObjectDetection(frame, confidence: _onnx.Confidence, iou: _onnx.Iou);
 
         var processedAt = DateTimeOffset.UtcNow;
 
-        var byLabel = maxPerLabel;
+        var byLabel = results
+            .GroupBy(r => r.Label.Name)
+            .ToDictionary(g => g.Key, g => g.Count());
         var detectedLabels = byLabel.Keys.ToArray();
         var totalDetections = byLabel.Values.Sum();
 
@@ -147,17 +89,21 @@ public class ObjectDetectionService : IObjectDetectionService
         );
     }
 
-    private void RotateOutputFiles(string outputPath, int maxFiles)
+    private void SaveDatasetFrame(SKBitmap frame)
     {
-        var files = Directory.GetFiles(outputPath, "*.mp4")
-            .OrderBy(File.GetCreationTimeUtc)
-            .ToList();
+        Directory.CreateDirectory(_video.DatasetPath);
 
-        while (files.Count >= maxFiles)
-        {
-            File.Delete(files[0]);
-            _logger.LogInformation("Deleted old video file: {File}", files[0]);
-            files.RemoveAt(0);
-        }
+        var filePath = Path.Combine(_video.DatasetPath, $"{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}.jpg");
+        using var data = frame.Encode(SKEncodedImageFormat.Jpeg, 95);
+        using var file = File.Create(filePath);
+        data.SaveTo(file);
+
+        _logger.LogInformation("Saved dataset frame: {File}", filePath);
+    }
+
+    public void Dispose()
+    {
+        _yolo.Dispose();
+        _semaphore.Dispose();
     }
 }
