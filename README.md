@@ -98,39 +98,52 @@ iptables-save > /etc/iptables/rules.v4
 ip route add <camera-ip>/32 via 10.10.0.2
 ```
 
-### 3. Собрать и задеплоить ObjectDetectionApi
+### 3. Деплой ObjectDetectionApi
+
+Деплой происходит автоматически при пуше в `main` через GitHub Actions (`.github/workflows/deploy.yml`).
+Workflow копирует `deploy.sh` на сервер и запускает его от `github_actions_user`. Скрипт делает `git pull` в `~github_actions_user/objectdetection/src`,
+собирает Release во временную папку `~github_actions_user/objectdetection/build`, останавливает сервис, копирует сборку в `/opt/objectdetection` и запускает сервис.
+systemd-юнит скрипт не трогает — он настраивается на сервере руками.
+Если сервис не поднялся, скрипт печатает последние строки журнала и завершается с ошибкой.
+
+**Первоначальная настройка сервера (один раз)**
+
+Пользователь `github_actions_user` и его SSH-ключ — те же, что для `income_expense_bot`.
+На сервере должны быть `git`, `ffmpeg` и .NET SDK 8 в `PATH` этого пользователя.
 
 ```sh
-# локально
-dotnet publish ObjectDetectionApi/ObjectDetectionApi -c Release -o /home/<user>/objectdetection-publish
-scp -P <ssh-port> -r /home/<user>/objectdetection-publish <user>@<server-ip>:/home/<user>/
+sudo mkdir -p /opt/objectdetection
+sudo chown -R github_actions_user:github_actions_user /opt/objectdetection
+
+# перенести настройки, модель и собранный датасет со старого места
+sudo cp /home/<user>/objectdetection-publish/appsettings.json /opt/objectdetection/
+sudo cp /home/<user>/objectdetection-publish/best.onnx /opt/objectdetection/
+sudo cp -r /home/<user>/objectdetection-publish/dataset_frames /opt/objectdetection/
+sudo chown -R github_actions_user:github_actions_user /opt/objectdetection
 ```
 
-### 4. Создать systemd сервис
+В `appsettings.json` поменять `Onnx:ModelPath` на `/opt/objectdetection/best.onnx`.
 
-```sh
-sudo tee /etc/systemd/system/objectdetection.service << 'EOF'
-[Unit]
-Description=Object Detection API
-After=network.target
+В существующем юните (`sudo systemctl edit --full objectdetection`) поменять:
 
-[Service]
-Type=simple
-User=<user>
-WorkingDirectory=/home/<user>/objectdetection-publish
-ExecStart=/home/<user>/objectdetection-publish/ObjectDetectionApi
-Restart=always
-RestartSec=10
-Environment=ASPNETCORE_ENVIRONMENT=Production
-Environment=ASPNETCORE_URLS=http://localhost:5000
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now objectdetection
+```ini
+User=github_actions_user
+WorkingDirectory=/opt/objectdetection
+ExecStart=/opt/objectdetection/ObjectDetectionApi
 ```
+
+Затем `sudo systemctl daemon-reload`. Остальное в юните (прокси, `ASPNETCORE_*`) оставить как есть.
+
+Добавить secrets в GitHub-репозиторий:
+
+| Secret | Значение |
+|--------|---------|
+| `SSH_KEY` | содержимое `~/.ssh/github_actions_key` |
+| `SSH_HOST` | IP сервера |
+| `SSH_PORT` | SSH порт |
+| `SSH_USER` | `github_actions_user` |
+
+После первого успешного деплоя старую папку `/home/<user>/objectdetection-publish` можно удалить.
 
 ---
 
@@ -139,7 +152,7 @@ sudo systemctl enable --now objectdetection
 ```json
 {
   "Onnx": {
-    "ModelPath": "/home/<user>/objectdetection-publish/best.onnx",
+    "ModelPath": "/opt/objectdetection/best.onnx",
     "ObjectsForSearch": ["dry_cat_food"],
     "Confidence": 0.5,
     "Iou": 0.45
@@ -181,7 +194,7 @@ sudo systemctl restart objectdetection
 # логи
 journalctl -u objectdetection -f
 # или файловые логи:
-tail -f /home/<user>/objectdetection-publish/logs/log-$(date +%Y%m%d).txt
+tail -f /opt/objectdetection/logs/log-$(date +%Y%m%d).txt
 ```
 
 ## Проверка туннеля
