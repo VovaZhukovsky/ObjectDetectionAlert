@@ -69,8 +69,9 @@ public class FoodStatusService : IFoodStatusService, IDisposable
         var best = Array.IndexOf(probabilities, probabilities.Max());
         var status = _statusByClassIndex[best];
 
-        if (status is FoodStatus.Low or FoodStatus.NoBowl)
-            SaveFrame(frame, Path.Combine(_video.StatusSnapshotPath, ToLabel(status)));
+        var snapshotPath = status is FoodStatus.Low or FoodStatus.NoBowl
+            ? SaveFrame(frame, Path.Combine(_video.StatusSnapshotPath, ToLabel(status)))
+            : null;
 
         _logger.LogInformation(
             "Food status: {Status} ({Confidence:F2}). All: {All}",
@@ -78,7 +79,7 @@ public class FoodStatusService : IFoodStatusService, IDisposable
             probabilities[best],
             string.Join(", ", _statusByClassIndex.Select((s, i) => $"{ToLabel(s)}:{probabilities[i]:F2}")));
 
-        return new FoodStatusResult(status, probabilities[best], DateTimeOffset.UtcNow);
+        return new FoodStatusResult(status, probabilities[best], DateTimeOffset.UtcNow, snapshotPath);
     }
 
     private float[] Classify(SKBitmap frame)
@@ -144,7 +145,7 @@ public class FoodStatusService : IFoodStatusService, IDisposable
 
     private static string ToLabel(FoodStatus status) => JsonNamingPolicy.SnakeCaseLower.ConvertName(status.ToString());
 
-    private void SaveFrame(SKBitmap frame, string directory)
+    private string SaveFrame(SKBitmap frame, string directory)
     {
         Directory.CreateDirectory(directory);
 
@@ -154,6 +155,7 @@ public class FoodStatusService : IFoodStatusService, IDisposable
         data.SaveTo(file);
 
         _logger.LogInformation("Saved frame: {File}", filePath);
+        return filePath;
     }
 
     public void Dispose()

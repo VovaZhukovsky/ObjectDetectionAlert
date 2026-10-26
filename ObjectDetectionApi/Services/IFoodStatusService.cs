@@ -12,7 +12,9 @@ public enum FoodStatus
 public record FoodStatusResult(
     FoodStatus Status,
     float Confidence,
-    DateTimeOffset ProcessedAt
+    DateTimeOffset ProcessedAt,
+    // saved frame for low and no_bowl, otherwise null
+    string? SnapshotPath
 );
 
 public interface IFoodStatusService

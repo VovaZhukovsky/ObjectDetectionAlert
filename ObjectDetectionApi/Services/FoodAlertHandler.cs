@@ -1,5 +1,6 @@
 using ObjectDetectionApi.Models;
 using Telegram.Bot;
+using Telegram.Bot.Types;
 
 namespace ObjectDetectionApi.Services;
 
@@ -36,11 +37,11 @@ public class FoodAlertHandler : IDetectionHandler
 
             case FoodStatus.Low:
                 ResetNoBowl();
-                await HandleLowAsync(cancellationToken);
+                await HandleLowAsync(result, cancellationToken);
                 break;
 
             case FoodStatus.NoBowl:
-                await HandleNoBowlAsync(cancellationToken);
+                await HandleNoBowlAsync(result, cancellationToken);
                 break;
 
             // the cat or a hand covers the bowl — we can't tell anything, keep the counters as they are
@@ -49,7 +50,7 @@ public class FoodAlertHandler : IDetectionHandler
         }
     }
 
-    private async Task HandleLowAsync(CancellationToken cancellationToken)
+    private async Task HandleLowAsync(FoodStatusResult result, CancellationToken cancellationToken)
     {
         // alert only after several low runs in a row, so one wrong prediction doesn't send a false alarm
         _consecutiveMisses++;
@@ -59,11 +60,11 @@ public class FoodAlertHandler : IDetectionHandler
             return;
 
         _logger.LogWarning("FoodAlertHandler: food is low — sending Telegram alert");
-        await _client.SendMessage(_chatId, "🍽️ Cat food is running low! Time to refill the bowl.", cancellationToken: cancellationToken);
+        await SendAlertAsync("🍽️ Cat food is running low! Time to refill the bowl.", result.SnapshotPath, cancellationToken);
         _alertSent = true;
     }
 
-    private async Task HandleNoBowlAsync(CancellationToken cancellationToken)
+    private async Task HandleNoBowlAsync(FoodStatusResult result, CancellationToken cancellationToken)
     {
         _consecutiveNoBowl++;
         _logger.LogInformation("FoodAlertHandler: bowl not in view ({Runs}/{Required})", _consecutiveNoBowl, _noBowlRunsToAlert);
@@ -72,8 +73,21 @@ public class FoodAlertHandler : IDetectionHandler
             return;
 
         _logger.LogWarning("FoodAlertHandler: bowl is missing — sending Telegram alert");
-        await _client.SendMessage(_chatId, "🥣 The bowl is not in view of the camera.", cancellationToken: cancellationToken);
+        await SendAlertAsync("🥣 The bowl is not in view of the camera.", result.SnapshotPath, cancellationToken);
         _noBowlAlertSent = true;
+    }
+
+    // the frame that triggered the alert goes along as a photo, so the bowl can be checked at a glance
+    private async Task SendAlertAsync(string text, string? snapshotPath, CancellationToken cancellationToken)
+    {
+        if (snapshotPath is null || !File.Exists(snapshotPath))
+        {
+            await _client.SendMessage(_chatId, text, cancellationToken: cancellationToken);
+            return;
+        }
+
+        await using var photo = File.OpenRead(snapshotPath);
+        await _client.SendPhoto(_chatId, InputFile.FromStream(photo, Path.GetFileName(snapshotPath)), caption: text, cancellationToken: cancellationToken);
     }
 
     private void ResetNoBowl()
