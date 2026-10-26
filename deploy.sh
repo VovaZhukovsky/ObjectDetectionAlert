@@ -45,10 +45,11 @@ cp -r "$BUILD_DIR"/. "$APP_DIR"/
 rm -rf "$BUILD_DIR"
 sudo systemctl start "${SERVICE_NAME}.service"
 
+# Workflow logs are public: print journal lines without the hostname
 sleep 5
 if ! systemctl is-active --quiet "${SERVICE_NAME}.service"; then
   echo "Service failed to start"
-  sudo journalctl -u "${SERVICE_NAME}.service" -n 50 --no-pager
+  sudo journalctl -u "${SERVICE_NAME}.service" -n 50 --no-pager -o cat
   exit 1
 fi
-sudo systemctl status "${SERVICE_NAME}.service" --no-pager
+sudo systemctl status "${SERVICE_NAME}.service" --no-pager -n 0

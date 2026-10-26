@@ -1,6 +1,6 @@
 # ObjectDetectionApi
 
-.NET 8 Web API для обнаружения объектов на кадре с RTSP-камеры с помощью YOLOv11 ONNX модели. Запускается на удалённом сервере, получает кадр напрямую с камеры через ffmpeg через WireGuard туннель, отправляет уведомления в Telegram.
+.NET 8 Web API, который по кадру с RTSP-камеры определяет состояние миски с кормом (`enough`, `low`, `blocked`, `no_bowl`) с помощью YOLO11 classify ONNX модели. Запускается на удалённом сервере, получает кадр напрямую с камеры через ffmpeg через WireGuard туннель, отправляет уведомления в Telegram.
 
 ## Схема инфраструктуры
 
@@ -152,16 +152,14 @@ ExecStart=/opt/objectdetection/ObjectDetectionApi
 ```json
 {
   "Onnx": {
-    "ModelPath": "/opt/objectdetection/best.onnx",
-    "ObjectsForSearch": ["dry_cat_food"],
-    "Confidence": 0.5,
-    "Iou": 0.45
+    "ModelPath": "/opt/objectdetection/best.onnx"
   },
   "Video": {
     "Input": "rtsp://<camera-user>:<camera-password>@<camera-ip>:554/ch=1&subtype=0",
     "CollectDataset": false,
     "DatasetPath": "dataset_frames",
-    "DatasetSaveEvery": 10
+    "DatasetSaveEvery": 10,
+    "StatusSnapshotPath": "status_snapshots"
   },
   "TelegramBot": {
     "Token": "...",
@@ -171,14 +169,18 @@ ExecStart=/opt/objectdetection/ObjectDetectionApi
     "IntervalSeconds": 60
   },
   "FoodAlert": {
-    "ConsecutiveMissesToAlert": 3
+    "ConsecutiveMissesToAlert": 3,
+    "NoBowlRunsToAlert": 10
   }
 }
 ```
 
 `CollectDataset: true` — сохранять чистые кадры (без рамок) для обучения новой модели в `DatasetPath`, каждый `DatasetSaveEvery`-й кадр. По умолчанию выключено. После изменения нужен перезапуск сервиса.  
-`ConsecutiveMissesToAlert` — сколько запусков подряд без корма нужно для тревоги в Telegram.  
-`Confidence` и `Iou` — поднять, если модель ловит фантомные объекты.
+`ModelPath` — классификатор, экспортированный Ultralytics (`yolo export format=onnx`). Классы и размер входа читаются из самой модели; если это не классификатор корма, сервис не стартует и пишет в лог, какие классы нашёл.  
+`StatusSnapshotPath` — каждый кадр со статусом `low` или `no_bowl` сохраняется в `StatusSnapshotPath/<статус>/`. Файлы не удаляются.  
+`ConsecutiveMissesToAlert` — сколько запусков подряд со статусом `low` нужно для тревоги «мало корма» в Telegram.  
+`NoBowlRunsToAlert` — сколько запусков подряд со статусом `no_bowl` нужно для отдельного сообщения «миски нет в кадре».  
+Статус `blocked` (кот или рука закрывают миску) счётчики не меняет. Каждое сообщение отправляется один раз и сбрасывается, когда миска снова видна.
 
 ---
 
@@ -208,6 +210,6 @@ ping <camera-ip>         # камера
 ## API
 
 ```
-GET /object/exist   — есть ли объекты из ObjectsForSearch на кадре
-GET /object/count   — количество по каждому классу
+GET /food/status    — статус миски на свежем кадре: {"status": "low", "confidence": 0.97, "processedAt": "..."}
+                      status: enough | low | blocked | no_bowl
 ```

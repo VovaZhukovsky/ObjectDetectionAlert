@@ -5,18 +5,18 @@ namespace ObjectDetectionApi.Workers;
 
 public class DetectionWorker : BackgroundService
 {
-    private readonly IObjectDetectionService _detectionService;
+    private readonly IFoodStatusService _foodStatusService;
     private readonly IEnumerable<IDetectionHandler> _handlers;
     private readonly WorkerSettings _settings;
     private readonly ILogger<DetectionWorker> _logger;
 
     public DetectionWorker(
-        IObjectDetectionService detectionService,
+        IFoodStatusService foodStatusService,
         IEnumerable<IDetectionHandler> handlers,
         WorkerSettings settings,
         ILogger<DetectionWorker> logger)
     {
-        _detectionService = detectionService;
+        _foodStatusService = foodStatusService;
         _handlers = handlers;
         _settings = settings;
         _logger = logger;
@@ -31,12 +31,12 @@ public class DetectionWorker : BackgroundService
             try
             {
                 _logger.LogInformation("DetectionWorker: starting scheduled detection run");
-                var result = await _detectionService.RunDetectionAsync(stoppingToken);
+                var result = await _foodStatusService.GetStatusAsync(stoppingToken);
 
                 _logger.LogInformation(
-                    "DetectionWorker: run complete. ObjectsFound={Found}, TotalDetections={Count}",
-                    result.ObjectsFound,
-                    result.TotalDetections);
+                    "DetectionWorker: run complete. Status={Status}, Confidence={Confidence:F2}",
+                    result.Status,
+                    result.Confidence);
 
                 foreach (var handler in _handlers)
                     await handler.HandleAsync(result, stoppingToken);

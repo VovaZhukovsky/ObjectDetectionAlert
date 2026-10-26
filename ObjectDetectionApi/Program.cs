@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using ObjectDetectionApi.Models;
 using ObjectDetectionApi.Services;
@@ -28,10 +30,11 @@ builder.Services
     .AddSingleton(s => s.GetRequiredService<IOptions<FoodAlertSettings>>().Value);
 
 builder.Services.AddSingleton<ISnapshotService, FfmpegSnapshotService>();
-builder.Services.AddSingleton<IObjectDetectionService, ObjectDetectionService>();
+builder.Services.AddSingleton<IFoodStatusService, FoodStatusService>();
 builder.Services.AddSingleton<IDetectionHandler, FoodAlertHandler>();
 builder.Services.AddHostedService<DetectionWorker>();
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower)));
 
 var app = builder.Build();
 

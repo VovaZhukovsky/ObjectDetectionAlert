@@ -57,3 +57,5 @@ appsettings.*
 CLAUDE.md
 video_output/
 dataset_frames
+# ONNX models live only on the server (/opt/objectdetection/best.onnx)
+*.onnx

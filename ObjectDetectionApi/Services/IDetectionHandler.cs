@@ -2,5 +2,5 @@ namespace ObjectDetectionApi.Services;
 
 public interface IDetectionHandler
 {
-    Task HandleAsync(DetectionResult result, CancellationToken cancellationToken = default);
+    Task HandleAsync(FoodStatusResult result, CancellationToken cancellationToken = default);
 }
